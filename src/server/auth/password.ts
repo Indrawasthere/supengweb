@@ -6,13 +6,7 @@ const DIGEST = "sha512";
 
 export function hashPassword(password: string, salt?: string) {
   const actualSalt = salt ?? crypto.randomBytes(16).toString("hex");
-  const derived = crypto.pbkdf2Sync(
-    password,
-    actualSalt,
-    ITERATIONS,
-    KEYLEN,
-    DIGEST,
-  );
+  const derived = crypto.pbkdf2Sync(password, actualSalt, ITERATIONS, KEYLEN, DIGEST);
   return {
     salt: actualSalt,
     hash: derived.toString("hex"),

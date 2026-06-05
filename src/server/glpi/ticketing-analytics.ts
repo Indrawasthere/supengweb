@@ -1,76 +1,174 @@
-import { glpiGet, glpiPost } from "./client";
+import {
+  getTickets,
+  getTicketAssignedUsers,
+  getTicketRequesters,
+  getTicketGroups,
+  GLPI_STATUS,
+  GLPI_PRIORITY,
+  GLPI_URGENCY,
+  type GlpiTicketRaw,
+} from "./client";
 
 import type {
   TicketRow,
   TicketStatus,
 } from "@/app/(main)/dashboard/ticketing-analytics/_components/ticket-table";
 
-function toTicketStatus(status?: string): TicketStatus {
-  const s = (status ?? "").toLowerCase();
-  if (s.includes("processing") || s.includes("assigned"))
+// Convert GLPI status number ke TicketStatus string
+function toTicketStatus(statusNum: number): TicketStatus {
+  const s = GLPI_STATUS[statusNum] ?? "";
+  if (
+    s.includes("Processing") ||
+    s.includes("assigned") ||
+    s.includes("planned")
+  ) {
     return "Processing (assigned)";
-  if (s.includes("waiting")) return "Waiting";
-  if (s.includes("resolved")) return "Resolved";
-  if (s.includes("closed")) return "Closed";
+  }
+  if (s.includes("Waiting")) return "Waiting";
+  if (s.includes("Solved")) return "Resolved";
+  if (s.includes("Closed")) return "Closed";
   return "New";
 }
 
-export async function fetchOngoingL2TicketsDummyFallback(args: {
+function formatDate(raw: string | undefined): string {
+  if (!raw) return "-";
+  // GLPI returns "2025-08-01 14:30:00" → kita format jadi "01-08-2025 14:30"
+  try {
+    const d = new Date(raw.replace(" ", "T"));
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${pad(d.getDate())}-${pad(d.getMonth() + 1)}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return raw;
+  }
+}
+
+function mapPriority(num: number): string {
+  // Map ke format P1-P5 yang biasa dipakai
+  const map: Record<number, string> = {
+    1: "P5",
+    2: "P4",
+    3: "P3",
+    4: "P2",
+    5: "P1",
+    6: "P1",
+  };
+  return map[num] ?? `P${num}`;
+}
+
+// Map raw GLPI ticket + linked data → TicketRow
+function mapToTicketRow(
+  raw: GlpiTicketRaw,
+  assignedUsers: string[],
+  requesters: string[],
+  groups: string[],
+): TicketRow {
+  return {
+    id: raw.id,
+    title: raw.name ?? `Tiket #${raw.id}`,
+    requester: requesters.join(", ") || "Unknown",
+    assignedToTechnician: assignedUsers.join(", ") || "Unassigned",
+    assignedToTechnicianGroup:
+      groups.join(", ") || "Technical Support Engineer",
+    status: toTicketStatus(raw.status),
+    priority: mapPriority(raw.priority),
+    openingDate: formatDate(raw.date),
+    lastUpdate: formatDate(raw.date_mod),
+    closingDate: formatDate(raw.closedate ?? raw.solvedate) || undefined,
+    urgency: GLPI_URGENCY[raw.urgency] ?? "-",
+    impact: GLPI_URGENCY[raw.impact] ?? "-",
+    description: raw.content
+      ? raw.content.replace(/<[^>]*>/g, " ").trim()
+      : undefined,
+    progressPercent: raw.percent_done ?? 0,
+  };
+}
+
+// -------------------------------------------------------
+// Main export: fetch ongoing L2 tickets from real GLPI
+// -------------------------------------------------------
+
+export async function fetchOngoingL2Tickets(opts: {
   limit?: number;
-}): Promise<{ rows: TicketRow[]; totals: Record<TicketStatus, number> }> {
-  // For now we fetch minimal list of tickets. If GLPI endpoint differs, this will throw and we’ll fallback to dummy in page.
-  const limit = args.limit ?? 50;
+  includeResolved?: boolean;
+}): Promise<{
+  rows: TicketRow[];
+  totals: Record<TicketStatus, number>;
+  fetchedAt: string;
+  error?: string;
+}> {
+  const limit = opts.limit ?? 100;
+  const statusFilter = opts.includeResolved ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4]; // ongoing only
 
-  // Typical GLPI REST: GET /Ticket?range=0-50
-  // We keep mapping tolerant because GLPI custom fields can differ.
-  const list = await glpiGet<any[]>(`/apirest.php/Ticket`, {
-    range: `0-${limit}`,
-  }).catch(async () => {
-    // Some GLPI versions require action-based endpoints; try alternative.
-    return glpiPost<any[]>(`/apirest.php/Ticket`, { range: `0-${limit}` });
-  });
+  let rawTickets: GlpiTicketRaw[] = [];
+  let error: string | undefined;
 
-  const items = Array.isArray(list) ? list : [];
+  try {
+    rawTickets = await getTickets({
+      range: `0-${limit - 1}`,
+      statusFilter,
+      withLinkedUsers: true,
+    });
+  } catch (err) {
+    error = err instanceof Error ? err.message : "Gagal fetch dari GLPI";
+    console.error("[GLPI] fetchOngoingL2Tickets error:", error);
+  }
 
-  const rows: TicketRow[] = items.slice(0, limit).map((t: any) => {
-    const status = toTicketStatus(t?.status?.name ?? t?.status ?? t?.state);
+  // Untuk tiap tiket, fetch linked users & groups
+  // Kita batch dengan Promise.all tapi limit concurrency biar ga DDoS GLPI
+  const rows: TicketRow[] = [];
 
-    return {
-      id: Number(t.id),
-      title: t.name ?? t.problem?.name ?? String(t.id),
-      requester: t.requester?.name ?? t.requester ?? t.user?.name ?? "Unknown",
-      assignedToTechnician:
-        t.assigned_to?.name ??
-        t.technician?.name ??
-        t.assignedToTechnician ??
-        "Unknown",
-      assignedToTechnicianGroup:
-        t.assigned_to_group?.name ??
-        t.technician_group?.name ??
-        t.assignedToTechnicianGroup ??
-        "Unknown",
-      status,
-      priority: t.priority?.name ?? t.priority ?? "P/NA",
-      openingDate: t.opening_date ?? t.date ?? "",
-      lastUpdate: t.last_update ?? t.update_date ?? "",
-      closingDate: t.resolution_date ?? t.closed_date ?? undefined,
-      urgency: t.urgency?.name ?? t.urgency ?? undefined,
-      impact: t.impact?.name ?? t.impact ?? undefined,
-      category: t.category?.name ?? t.category ?? undefined,
-      location: t.location?.name ?? t.location ?? undefined,
-      description: t.content ?? t.description ?? undefined,
-    };
-  });
+  const chunkSize = 5;
+  for (let i = 0; i < rawTickets.length; i += chunkSize) {
+    const chunk = rawTickets.slice(i, i + chunkSize);
+    const resolved = await Promise.allSettled(
+      chunk.map(async (t) => {
+        const [assignedUsers, requesters, groups] = await Promise.allSettled([
+          getTicketAssignedUsers(t.id),
+          getTicketRequesters(t.id),
+          getTicketGroups(t.id),
+        ]);
+
+        const aUsers =
+          assignedUsers.status === "fulfilled"
+            ? assignedUsers.value.map((u) => u.name)
+            : [];
+        const reqs =
+          requesters.status === "fulfilled"
+            ? requesters.value.map((u) => u.name)
+            : [];
+        const grps =
+          groups.status === "fulfilled" ? groups.value.map((g) => g.name) : [];
+
+        return mapToTicketRow(t, aUsers, reqs, grps);
+      }),
+    );
+
+    for (const r of resolved) {
+      if (r.status === "fulfilled") rows.push(r.value);
+    }
+  }
 
   const totals: Record<TicketStatus, number> = {
-    "Processing (assigned)": rows.filter(
-      (r) => r.status === "Processing (assigned)",
-    ).length,
-    Waiting: rows.filter((r) => r.status === "Waiting").length,
-    Resolved: rows.filter((r) => r.status === "Resolved").length,
-    Closed: rows.filter((r) => r.status === "Closed").length,
-    New: rows.filter((r) => r.status === "New").length,
+    "Processing (assigned)": 0,
+    Waiting: 0,
+    Resolved: 0,
+    Closed: 0,
+    New: 0,
   };
 
-  return { rows, totals };
+  for (const row of rows) {
+    if (row.status in totals) {
+      totals[row.status as TicketStatus]++;
+    }
+  }
+
+  return {
+    rows,
+    totals,
+    fetchedAt: new Date().toISOString(),
+    error,
+  };
 }
+
+// Keep old dummy fallback untuk development tanpa GLPI
+export { fetchOngoingL2Tickets as fetchOngoingL2TicketsDummyFallback };

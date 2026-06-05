@@ -1,14 +1,4 @@
-import {
-  Archive,
-  CircleHelp,
-  File,
-  Inbox,
-  Keyboard,
-  type LucideIcon,
-  Send,
-  Star,
-  Trash2,
-} from "lucide-react";
+import { Archive, CircleHelp, File, Inbox, Keyboard, type LucideIcon, Send, Star, Trash2 } from "lucide-react";
 import { siFigma, siGoogledocs, siGooglephotos } from "simple-icons";
 
 const arhamKhan = {
@@ -21,8 +11,7 @@ const weblabsStudio = {
   email: "contact@weblabs.studio",
 };
 
-const minutesAgo = (minutes: number) =>
-  new Date(Date.now() - minutes * 60_000).toISOString();
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const hoursAgo = (hours: number) => minutesAgo(hours * 60);
 const daysAgo = (days: number) => hoursAgo(days * 24);
 

@@ -3,8 +3,9 @@
 import { z } from "zod";
 
 import { prisma } from "@/server/db/prisma";
-import { createSession, destroySession } from "./session";
+
 import { formatStoredPassword, hashPassword, verifyPassword } from "./password";
+import { createSession, destroySession } from "./session";
 
 const registerSchema = z.object({
   email: z.string().email(),

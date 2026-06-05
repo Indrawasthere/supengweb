@@ -1,12 +1,8 @@
 "use client";
 
-import {
-  CircleUser,
-  CreditCard,
-  EllipsisVertical,
-  LogOut,
-  MessageSquareDot,
-} from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { EllipsisVertical, LogOut, User } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -25,6 +21,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { getInitials } from "@/lib/utils";
+import { logoutAction } from "@/server/auth/actions";
 
 export function NavUser({
   user,
@@ -33,9 +30,29 @@ export function NavUser({
     readonly name: string;
     readonly email: string;
     readonly avatar: string;
+    readonly role?: string;
   };
 }) {
   const { isMobile } = useSidebar();
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    try {
+      await logoutAction();
+      toast.success("Berhasil logout!");
+      router.push("/auth/v1/login");
+      router.refresh();
+    } catch {
+      toast.error("Gagal logout, coba lagi.");
+    }
+  };
+
+  const roleLabel: Record<string, string> = {
+    L2: "L2 — TSE",
+    LEAD: "Lead TSE",
+    L1_TS: "L1 — TS",
+    ADMIN: "Admin",
+  };
 
   return (
     <SidebarMenu>
@@ -55,7 +72,7 @@ export function NavUser({
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{user.name}</span>
                 <span className="truncate text-muted-foreground text-xs">
-                  {user.email}
+                  {user.role ? (roleLabel[user.role] ?? user.role) : user.email}
                 </span>
               </div>
               <EllipsisVertical className="ml-auto size-4" />
@@ -84,9 +101,19 @@ export function NavUser({
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem disabled>
+                <User />
+                {user.role ? (roleLabel[user.role] ?? user.role) : "Member"}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onClick={handleLogout}
+            >
               <LogOut />
-              Log out
+              Logout
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
